@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+    "encoding/json"
 
 	"github.com/spf13/viper"
 	"gopkg.in/Graylog2/go-gelf.v2/gelf"
@@ -29,6 +31,40 @@ var Build string
 
 var l = log.New(os.Stdout, "", 0)
 var el = log.New(os.Stderr, "", 0)
+
+// {"sequence":4626383,"timestamp":"1601499888.726","messages":[{"type":1300,"data":"arch=c000003e syscall=202 success=yes exit=0 a0=7fd900bd82c0 a1=81 a2=1 a3=7fd8eb4f79e0 items=0 ppid=1491 pid=1512 auid=4294967295 uid=999 gid=999 euid=999 suid=999 fsuid=999 egid=999 sgid=999 fsgid=999 tty=(none) ses=4294967295 comm=\"mysqld\" exe=\"/usr/sbin/mysqld\" key=(null)","containers":{"id":"d3cf4eb690fc35a8671ae8022465f5ac854f8ee1fa90c9688f06bcec8868aced","image":"mysql:latest","name":"","pod_name":"","pod_namespace":"","pod_uid":""}}],"uid_map":{"4294967295":"UNKNOWN_USER","999":"UNKNOWN_USER"}}
+type Stat struct {
+    Count         int
+	Syscall       string
+	Pid           string
+	Uid           string
+	Comm          string
+	Container_id  string
+	Container_img string
+	Pod_name      string
+	Pod_ns        string
+}
+
+
+// Map para almacenar estadísticas en objetos stat
+// el id es un string para poder acceder directamente
+// al contador de una llamada al sistema en concreto
+// var stats = map[string]*stat{}
+type Stats struct {
+    Data          map[string]*Stat
+	EpochStart    int64
+	EpochEnd      int64
+
+}
+
+func NewStats() *Stats {
+    newstats := new(Stats)
+    now := time.Now()
+	newstats.EpochStart = now.UnixNano()
+	newstats.Data = make(map[string]*Stat)
+	return newstats
+}
+var sc_stats = NewStats()
 
 type executor func(string, ...string) error
 
@@ -405,6 +441,7 @@ func main() {
 		el.Fatal(err)
 	}
 
+	sc_stats.EpochEnd = sc_stats.EpochStart + config.GetInt64("stats.delay")*1000000000
 	marshaller := NewAuditMarshaller(
 		writer,
 		uint16(config.GetInt("events.min")),
@@ -429,7 +466,29 @@ func main() {
 		if msg == nil {
 			continue
 		}
-
 		marshaller.Consume(msg)
+		// Check if it's time to print stats
+		if time.Now().UnixNano() >= sc_stats.EpochEnd {
+            byteArray, err := json.Marshal(sc_stats)
+            if err != nil {
+                el.Println(err)
+            }
+			// Write to stats file
+            f, err := os.OpenFile(config.GetString("stats.path"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+            if err != nil {
+                panic(err)
+            }
+
+            defer f.Close()
+
+            if _, err = f.WriteString(string(byteArray)); err != nil {
+                panic(err)
+            }
+            //l.Println(string(byteArray))
+
+			sc_stats = NewStats()
+	        sc_stats.EpochEnd = sc_stats.EpochStart + config.GetInt64("stats.delay")*1000000000
+
+		}
 	}
 }

@@ -23,6 +23,18 @@ message_tracking:
   # Maximum out of orderness before a missed sequence is presumed dropped, default 500
   max_out_of_order: 500
 
+
+
+# Configure syscall stats
+stats:
+
+  # Delay between stats write
+  delay: 10
+
+  # File to write stats
+  path:
+
+
 # Configure where to output audit events
 # Only 1 output can be active at a given time
 output:

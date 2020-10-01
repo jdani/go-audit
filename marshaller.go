@@ -11,6 +11,8 @@ const (
 	EVENT_EOE = 1320 // End of multi packet event
 )
 
+var kvrex = regexp.MustCompile("(\\w+)=(\\w+)")
+
 type AuditMarshaller struct {
 	msgs          map[int]*AuditMessageGroup
 	writer        *AuditWriter
@@ -66,6 +68,8 @@ func NewAuditMarshaller(w *AuditWriter, eventMin uint16, eventMax uint16, trackM
 // Ingests a netlink message and likely prepares it to be logged
 func (a *AuditMarshaller) Consume(nlMsg *syscall.NetlinkMessage) {
 	aMsg := NewAuditMessage(nlMsg)
+	// el.Println(">>>>>>>>", aMsg, "<<<<<<<<")
+
 
 	if aMsg.Seq == 0 {
 		// We got an invalid audit message, return the current message and reset
@@ -124,10 +128,57 @@ func (a *AuditMarshaller) completeMessage(seq int) {
 		delete(a.msgs, seq)
 		return
 	}
-
 	if err := a.writer.Write(msg); err != nil {
 		el.Println("Failed to write message. Error:", err)
 		os.Exit(1)
+	} else {
+
+	    for _,m := range msg.Msgs {
+                data := kvrex.FindAllStringSubmatch(m.Data, -1)
+                sc_fields := make(map[string]string)
+                for _, kv := range data {
+                    k := kv[1]
+                    v := kv[2]
+                    sc_fields[k] = v
+                }
+                if len(m.Containers) > 0 {
+                  sc_fields["container_id"] = m.Containers["id"]
+                  sc_fields["container_image"] = m.Containers["image"]
+                  sc_fields["pod_name"] = m.Containers["pod_name"]
+                  sc_fields["pod_ns"] = m.Containers["pod_namespace"]
+                }
+                if len(sc_fields) > 0 {
+                    stat_id := sc_fields["syscall"] +
+                               sc_fields["pid"] +
+                               sc_fields["uid"] +
+                               sc_fields["comm"] +
+                               sc_fields["container_id"] +
+                               sc_fields["container_image"] +
+                               sc_fields["pod_name"] +
+                               sc_fields["pod_ns"]
+					if len(stat_id) == 0 {
+				        //l.Println("Sin stat_id, siguiente iteración")
+				        continue
+					}
+                    s, stat_id_found := sc_stats.Data[stat_id]
+                    if stat_id_found {
+                        // Existe esa llamada al sistema, incrementar contador
+                        s.Count++
+                    } else {
+                        // No existe. Crear y poner contador a 1
+                        sc_stats.Data[stat_id] = new(Stat)
+                        sc_stats.Data[stat_id].Count = 1
+                        sc_stats.Data[stat_id].Syscall = sc_fields["syscall"]
+                        sc_stats.Data[stat_id].Pid = sc_fields["pid"]
+                        sc_stats.Data[stat_id].Uid = sc_fields["uid"]
+                        sc_stats.Data[stat_id].Comm = sc_fields["comm"]
+                        sc_stats.Data[stat_id].Container_id = sc_fields["container_id"]
+                        sc_stats.Data[stat_id].Container_img = sc_fields["container_image"]
+                        sc_stats.Data[stat_id].Pod_name = sc_fields["pod_name"]
+                        sc_stats.Data[stat_id].Pod_ns = sc_fields["pod_ns"]
+                    }
+                }
+        }
 	}
 
 	delete(a.msgs, seq)
